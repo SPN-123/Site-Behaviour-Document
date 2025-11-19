@@ -4,8 +4,8 @@ import os
 from typing import List
 
 # ---------- CONFIG ----------
-EXCEL_PATH = "XY.xlsx"   # <--- path to your uploaded Excel (from your session)
-SHEET_NAME = "XY"                   # change if your sheet name is different
+EXCEL_PATH = "/mnt/data/XY.xlsx"   # <--- path to your uploaded Excel (from your session)
+SHEET_NAME = "Sheet1"                   # change if your sheet name is different
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
 st.title("🔎 OTA Knowledge Search Tool")
