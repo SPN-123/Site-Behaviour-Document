@@ -1,11 +1,13 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import os
+import re
 from typing import List
 
 # ---------- CONFIG ----------
-EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # prefer repo file, fallback to session upload
-SHEET_NAME = "Sheet1"  # default sheet to use silently when available
+EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # repo path first, session path fallback
+SHEET_NAME = "Sheet1"  # prefer this sheet silently if present
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
 st.title("🔎 OTA Knowledge Search Tool")
@@ -19,7 +21,6 @@ def find_excel(paths: List[str]):
     return None
 
 def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
-    """Read excel with clear errors."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Excel file not found at: {path}")
     try:
@@ -33,19 +34,33 @@ def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
 def load_df_cached(path: str, sheet_name: str = None) -> pd.DataFrame:
     return read_excel_safe(path, sheet_name)
 
-# ---------- Load Data (with fallback uploader) ----------
+def extract_key_values(text: str) -> dict:
+    """
+    Extract key:value pairs from a free-text detail string.
+    Returns dict {lower_key: value}.
+    Pattern matches 'Key: Value' until next separator (; , or newline) or end.
+    """
+    results = {}
+    if not isinstance(text, str):
+        return results
+    pattern = re.compile(r"([A-Za-z0-9_\- ]+?)\s*:\s*([^;\n\r,]+)")
+    for m in pattern.finditer(text):
+        key = m.group(1).strip().lower()
+        val = m.group(2).strip()
+        results[key] = val
+    return results
+
+# ---------- Load Data (prefer repo, else uploader) ----------
 df = None
 found_path = find_excel(EXCEL_PATHS)
 
 if found_path:
-    # silently choose sheet (no banner shown)
+    # silently pick preferred sheet (no banner / selectbox shown)
     try:
         xls = pd.ExcelFile(found_path)
     except Exception as e:
         st.error(f"Error reading workbook: {e}")
         st.stop()
-
-    # choose sheet silently: prefer SHEET_NAME, else first sheet
     sheet_list = xls.sheet_names
     chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
     try:
@@ -54,7 +69,7 @@ if found_path:
         st.error(f"Failed to load sheet '{chosen_sheet}': {e}")
         st.stop()
 else:
-    # show uploader if not found
+    # fallback uploader (visible)
     uploaded = st.file_uploader("Upload XY.xlsx (fallback)", type=["xlsx"])
     if uploaded is None:
         st.info("Please upload the XY.xlsx file or place it in the repo root as 'XY.xlsx'.")
@@ -64,7 +79,6 @@ else:
     except Exception as e:
         st.error(f"Error reading uploaded workbook: {e}")
         st.stop()
-    # select sheet silently (prefer SHEET_NAME if exists)
     sheet_list = xls.sheet_names
     chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
     try:
@@ -79,151 +93,95 @@ if df is None or df.empty:
     st.stop()
 
 # ---------- Detect structure ----------
-cols = [c for c in df.columns]
-# Try detect OTA column
-possible_ota_cols = [c for c in cols if c.lower() in ("ota", "ota name", "ota_name", "channel", "channel name")]
-ota_col = possible_ota_cols[0] if possible_ota_cols else cols[0]
+cols = list(df.columns)
+lower_map = {c.lower(): c for c in cols}
 
-has_category_col = any(c.lower() == "category" for c in cols)
-category_col = [c for c in cols if c.lower() == "category"][0] if has_category_col else None
-
-if not has_category_col:
-    # treat other columns (except ota_col) as category columns
-    category_cols = [c for c in cols if c != ota_col]
+# OTA column detection
+if "otaname" in lower_map:
+    ota_col = lower_map["otaname"]
+elif "ota name" in lower_map:
+    ota_col = lower_map["ota name"]
 else:
-    category_cols = None
+    ota_col = cols[0]
 
-# Build ota list
-ota_list = sorted(df[ota_col].dropna().astype(str).unique(), key=str.lower)
+# Detail column detection
+if "detail" in lower_map:
+    detail_col = lower_map["detail"]
+elif "details" in lower_map:
+    detail_col = lower_map["details"]
+else:
+    # fallback to second column if present
+    if len(cols) >= 2:
+        detail_col = cols[1] if cols[1] != ota_col else cols[0]
+    else:
+        detail_col = ota_col
+
+# normalize strings used for matching
+df[ota_col] = df[ota_col].astype(str).str.strip()
+df[detail_col] = df[detail_col].astype(str)
+
+# Build OTA list
+ota_list = sorted(df[ota_col].dropna().unique(), key=str.lower)
 
 # ---------- UI: Search & select OTA ----------
-query = st.text_input("Search OTA name (type part of the OTA name):").strip()
+st.subheader("Search OTA")
+query = st.text_input("OTA name (type part or full name):").strip()
 
-if query:
-    matches = [o for o in ota_list if query.lower() in o.lower()]
-else:
-    matches = ota_list
+matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
 
 if not matches:
-    st.warning("No OTA matches found. Try a different search term or upload a different file.")
+    st.warning("No matching OTA found. Try a different search term.")
     st.stop()
 
+# keep the OTA selectbox visible (as you requested)
 selected_ota = st.selectbox("Select OTA from matches", matches)
 
-# ---------- Determine available categories for selected OTA ----------
-FIXED_CATEGORIES = ["Setup details", "ARI", "Reservations"]
+# ---------- Show details & second search box ----------
+rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
 
-def get_available_categories_for_ota(ota: str) -> List[str]:
-    ota = str(ota).strip()
-    if has_category_col:
-        rows = df[df[ota_col].astype(str).str.strip().str.lower() == ota.lower()]
-        if rows.empty:
-            return []
-        cats = rows[category_col].dropna().astype(str).str.strip().unique().tolist()
-        return cats
-    else:
-        # one-row-per-OTA expected
-        rows = df[df[ota_col].astype(str).str.strip().str.lower() == ota.lower()]
-        if rows.empty:
-            return []
-        row = rows.iloc[0]
-        available = []
-        for c in category_cols:
-            val = row.get(c)
-            if pd.notna(val):
-                sval = str(val).strip().lower()
-                if sval not in ("", "na", "n/a", "none", "no", "0"):
-                    available.append(c)
-        return available
+st.markdown(f"### Details for **{selected_ota}**")
 
-available_categories = get_available_categories_for_ota(selected_ota)
+if rows.empty:
+    st.info("No details found for the selected OTA.")
+else:
+    # gather detail texts from all matching rows
+    detail_texts = rows[detail_col].fillna("").astype(str).tolist()
 
-# Normalize available categories to match fixed names when possible
-normalized_available = set()
-for a in available_categories:
-    a_low = a.strip().lower()
-    if "setup" in a_low:
-        normalized_available.add("Setup details")
-    elif a_low in ("ari", "a.r.i"):
-        normalized_available.add("ARI")
-    elif "reserv" in a_low:
-        normalized_available.add("Reservations")
-    else:
-        normalized_available.add(a)
+    # show raw detail rows collapsed (keeps previous behavior)
+    with st.expander("Show raw Detail rows"):
+        for i, t in enumerate(detail_texts, start=1):
+            st.write(f"**{i}.** {t}")
 
-# ---------- Show category buttons (only those relevant to selected OTA) ----------
-st.markdown(f"**Available categories for**: `{selected_ota}`")
-cols_btn = st.columns(len(FIXED_CATEGORIES))
-showed_any = False
-for i, cat in enumerate(FIXED_CATEGORIES):
-    with cols_btn[i]:
-        if cat in normalized_available:
-            showed_any = True
-            if st.button(cat):
-                if has_category_col:
-                    subset = df[
-                        (df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()) &
-                        (df[category_col].astype(str).str.strip().str.lower().str.contains(cat.split()[0].lower()))
-                    ]
-                    if subset.empty:
-                        st.info("No details found for this OTA/category.")
-                    else:
-                        details_df = subset.drop(columns=[ota_col, category_col], errors="ignore")
-                        if details_df.shape[1] == 0:
-                            st.write("Row data:")
-                            st.write(subset)
-                        else:
-                            st.write(f"Details for **{cat}**:")
-                            st.dataframe(details_df)
-                else:
-                    rows = df[df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()]
-                    if rows.empty:
-                        st.info("No row found for this OTA.")
-                    else:
-                        matched_cols = [c for c in category_cols if c.strip().lower() == cat.lower() or cat.split()[0].lower() in c.strip().lower()]
-                        if not matched_cols:
-                            matched_cols = [c for c in category_cols if cat.split()[0].lower() in c.strip().lower()]
-                        if not matched_cols:
-                            st.info("No column found for this category in the sheet.")
-                        else:
-                            for mc in matched_cols:
-                                val = rows.iloc[0].get(mc)
-                                if pd.isna(val) or str(val).strip() == "":
-                                    st.info(f"No content in column {mc} for this OTA.")
-                                else:
-                                    st.write(f"**{mc}**:")
-                                    st.write(val)
+    # second search box: user enters the key name (text before ':')
+    st.subheader("Search detail key")
+    key_query = st.text_input("Enter detail key (e.g. ChannelId, Allocation, Sell Code):").strip().lower()
+
+    if key_query:
+        extracted = []
+        for t in detail_texts:
+            kv = extract_key_values(t)
+            if key_query in kv:
+                extracted.append(kv[key_query])
+        if not extracted:
+            st.info(f"No value found for key '{key_query}' in the Detail column for this OTA.")
         else:
-            st.markdown(f"<div style='opacity:0.45;padding:8px;border-radius:6px;border:1px solid #eee;text-align:center'>{cat} (not available)</div>", unsafe_allow_html=True)
-
-if not showed_any:
-    if len(available_categories) > 0:
-        st.subheader("Other categories available for this OTA")
-        for c in available_categories:
-            if st.button(c):
-                if has_category_col:
-                    subset = df[
-                        (df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()) &
-                        (df[category_col].astype(str).str.strip().str.lower() == c.strip().lower())
-                    ]
-                    if subset.empty:
-                        st.info("No details found for this OTA/category.")
-                    else:
-                        st.dataframe(subset.drop(columns=[ota_col, category_col], errors="ignore"))
-                else:
-                    rows = df[df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()]
-                    if rows.empty:
-                        st.info("No row found for this OTA.")
-                    else:
-                        val = rows.iloc[0].get(c)
-                        st.write(val)
+            st.markdown(f"**Values for '{key_query}':**")
+            # show unique values preserving order
+            seen = set()
+            uniq = []
+            for v in extracted:
+                if v not in seen:
+                    uniq.append(v)
+                    seen.add(v)
+            for i, v in enumerate(uniq, start=1):
+                st.write(f"{i}. {v}")
     else:
-        st.info("No categories found for the selected OTA.")
+        st.info("Enter a detail key in the second search box to extract its value from the Detail column.")
 
-# ---------- Optional: show raw row ----------
-with st.expander("Show raw row for selected OTA"):
-    st.write(df[df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()])
+# ---------- Raw rows expander ----------
+with st.expander("Show raw rows for selected OTA"):
+    st.dataframe(rows.reset_index(drop=True))
 
 # ---------- Footer guidance ----------
 st.markdown("---")
-st.caption("If you deploy from GitHub, change EXCEL_PATHS to include 'XY.xlsx' as needed.")
+st.caption("If you deploy from GitHub, ensure 'XY.xlsx' is in the repo root or update EXCEL_PATHS accordingly.")
