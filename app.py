@@ -5,7 +5,6 @@ import os
 from typing import List
 
 # ----------------- CONFIG -----------------
-# Try repo path first (for GitHub deploy), then session path
 EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]
 DEFAULT_SHEET = "Sheet1"
 
@@ -22,11 +21,6 @@ def find_excel(paths: List[str]):
 
 @st.cache_data
 def load_excel(path_or_file, sheet_name=None):
-    """
-    Accepts either a filesystem path string or an uploaded file-like object returned by st.file_uploader.
-    Returns a pandas.DataFrame.
-    """
-    # If path_or_file is a path string
     if isinstance(path_or_file, str):
         if not os.path.exists(path_or_file):
             raise FileNotFoundError(f"File not found: {path_or_file}")
@@ -34,11 +28,9 @@ def load_excel(path_or_file, sheet_name=None):
             return pd.read_excel(path_or_file)
         return pd.read_excel(path_or_file, sheet_name=sheet_name)
     else:
-        # uploaded file-like object
         xls = pd.ExcelFile(path_or_file)
         if sheet_name and sheet_name in xls.sheet_names:
             return pd.read_excel(xls, sheet_name=sheet_name)
-        # else default to first sheet
         return pd.read_excel(xls, sheet_name=0)
 
 # ----------------- Load workbook -----------------
@@ -76,8 +68,6 @@ if df is None or df.empty:
     st.stop()
 
 # ----------------- Validate expected columns -----------------
-# The user said the sheet has two columns: OTAName and Detail
-# We'll attempt to detect those names case-insensitively.
 cols = list(df.columns)
 lower_map = {c.lower(): c for c in cols}
 
@@ -86,19 +76,17 @@ if "otaname" in lower_map:
 elif "ota name" in lower_map:
     ota_col = lower_map["ota name"]
 else:
-    # fallback to the first column if exact name not found
     ota_col = cols[0]
 
 if "detail" in lower_map:
     detail_col = lower_map["detail"]
 else:
-    # fallback to second column if present, else same as ota_col (will show nothing)
     if len(cols) >= 2:
         detail_col = cols[1] if cols[1] != ota_col else cols[0]
     else:
         detail_col = ota_col
 
-st.caption(f"Detected columns: OTA column = `{ota_col}`, Detail column = `{detail_col}`")
+# NOTE: Removed the st.caption(...) line that previously displayed the detected columns.
 
 # Normalize strings for matching
 df[ota_col] = df[ota_col].astype(str).str.strip()
@@ -130,14 +118,9 @@ rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
 if rows.empty:
     st.info("No details found for the selected OTA.")
 else:
-    # Show the 'Detail' column values. If multiple rows exist, show them all.
     details = rows[detail_col].fillna("").tolist()
-    # If you prefer a table with other columns, you can show rows[ [ota_col, detail_col] ]
-    # But per your request, show only the Detail values
     for i, d in enumerate(details, start=1):
         st.write(f"**{i}.** {d}")
 
-# ----------------- Optional: show raw rows -----------------
 with st.expander("Show raw rows for this OTA"):
     st.dataframe(rows.reset_index(drop=True))
-
