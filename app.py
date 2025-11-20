@@ -4,14 +4,19 @@ import os
 from typing import List
 
 # ---------- CONFIG ----------
-EXCEL_PATH = "/mnt/data/XY.xlsx"   # <--- path to your uploaded Excel (from your session)
-SHEET_NAME = "Sheet1"                   # change if your sheet name is different
+EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # prefer repo file, fallback to session upload
+SHEET_NAME = "Sheet1"  # default sheet to use silently when available
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
 st.title("🔎 OTA Knowledge Search Tool")
 st.write("Type an OTA name in the box, choose the match, then select a category button for that OTA.")
 
 # ---------- Helpers ----------
+def find_excel(paths: List[str]):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
 
 def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
     """Read excel with clear errors."""
@@ -20,7 +25,6 @@ def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
     try:
         if sheet_name is None:
             return pd.read_excel(path)
-        # if sheet name not present pandas will raise — let it bubble as helpful error
         return pd.read_excel(path, sheet_name=sheet_name)
     except Exception as e:
         raise RuntimeError(f"Failed to read Excel file: {e}") from e
@@ -29,39 +33,45 @@ def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
 def load_df_cached(path: str, sheet_name: str = None) -> pd.DataFrame:
     return read_excel_safe(path, sheet_name)
 
-
 # ---------- Load Data (with fallback uploader) ----------
-uploaded_df = None
+df = None
+found_path = find_excel(EXCEL_PATHS)
 
-try:
-    if os.path.exists(EXCEL_PATH):
-        df = load_df_cached(EXCEL_PATH, SHEET_NAME)
-    else:
-        # removed warning
-        uploaded = st.file_uploader("Upload XY.xlsx (fallback)", type=["xlsx"])
-        if uploaded is None:
-            st.info("Please upload the XY.xlsx file or place it at the path: /mnt/data/XY.xlsx")
-            st.stop()
-        else:
-            # read uploaded file
-            try:
-                # If provided sheet name exists use it, else use first sheet
-                xls = pd.ExcelFile(uploaded)
-                sheet_to_read = SHEET_NAME if SHEET_NAME in xls.sheet_names else 0
-                df = pd.read_excel(xls, sheet_name=sheet_to_read)
-            except Exception as e:
-                st.error(f"Error reading uploaded file: {e}")
-                st.stop()
+if found_path:
+    # silently choose sheet (no banner shown)
+    try:
+        xls = pd.ExcelFile(found_path)
+    except Exception as e:
+        st.error(f"Error reading workbook: {e}")
+        st.stop()
 
-except FileNotFoundError as e:
-    st.error(str(e))
-    st.stop()
-except RuntimeError as e:
-    st.error(str(e))
-    st.stop()
-except Exception as e:
-    st.error(f"Unexpected error: {e}")
-    st.stop()
+    # choose sheet silently: prefer SHEET_NAME, else first sheet
+    sheet_list = xls.sheet_names
+    chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
+    try:
+        df = load_df_cached(found_path, chosen_sheet)
+    except Exception as e:
+        st.error(f"Failed to load sheet '{chosen_sheet}': {e}")
+        st.stop()
+else:
+    # show uploader if not found
+    uploaded = st.file_uploader("Upload XY.xlsx (fallback)", type=["xlsx"])
+    if uploaded is None:
+        st.info("Please upload the XY.xlsx file or place it in the repo root as 'XY.xlsx'.")
+        st.stop()
+    try:
+        xls = pd.ExcelFile(uploaded)
+    except Exception as e:
+        st.error(f"Error reading uploaded workbook: {e}")
+        st.stop()
+    # select sheet silently (prefer SHEET_NAME if exists)
+    sheet_list = xls.sheet_names
+    chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
+    try:
+        df = pd.read_excel(xls, sheet_name=chosen_sheet)
+    except Exception as e:
+        st.error(f"Error reading uploaded file sheet '{chosen_sheet}': {e}")
+        st.stop()
 
 # Basic validation
 if df is None or df.empty:
@@ -95,14 +105,13 @@ else:
     matches = ota_list
 
 if not matches:
-    # removed warning
+    st.warning("No OTA matches found. Try a different search term or upload a different file.")
     st.stop()
 
 selected_ota = st.selectbox("Select OTA from matches", matches)
 
 # ---------- Determine available categories for selected OTA ----------
 FIXED_CATEGORIES = ["Setup details", "ARI", "Reservations"]
-
 
 def get_available_categories_for_ota(ota: str) -> List[str]:
     ota = str(ota).strip()
@@ -130,7 +139,6 @@ def get_available_categories_for_ota(ota: str) -> List[str]:
 available_categories = get_available_categories_for_ota(selected_ota)
 
 # Normalize available categories to match fixed names when possible
-# (so e.g. 'Setup detail' or 'Setup details' both map)
 normalized_available = set()
 for a in available_categories:
     a_low = a.strip().lower()
@@ -141,7 +149,6 @@ for a in available_categories:
     elif "reserv" in a_low:
         normalized_available.add("Reservations")
     else:
-        # keep the original
         normalized_available.add(a)
 
 # ---------- Show category buttons (only those relevant to selected OTA) ----------
@@ -153,7 +160,6 @@ for i, cat in enumerate(FIXED_CATEGORIES):
         if cat in normalized_available:
             showed_any = True
             if st.button(cat):
-                # Show details for this category
                 if has_category_col:
                     subset = df[
                         (df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()) &
@@ -170,13 +176,10 @@ for i, cat in enumerate(FIXED_CATEGORIES):
                             st.write(f"Details for **{cat}**:")
                             st.dataframe(details_df)
                 else:
-                    # category columns layout: read the column value
                     rows = df[df[ota_col].astype(str).str.strip().str.lower() == selected_ota.lower()]
                     if rows.empty:
                         st.info("No row found for this OTA.")
                     else:
-                        # try to find the original column that matched this fixed category
-                        # prefer exact match else fuzzy substring
                         matched_cols = [c for c in category_cols if c.strip().lower() == cat.lower() or cat.split()[0].lower() in c.strip().lower()]
                         if not matched_cols:
                             matched_cols = [c for c in category_cols if cat.split()[0].lower() in c.strip().lower()]
@@ -194,7 +197,6 @@ for i, cat in enumerate(FIXED_CATEGORIES):
             st.markdown(f"<div style='opacity:0.45;padding:8px;border-radius:6px;border:1px solid #eee;text-align:center'>{cat} (not available)</div>", unsafe_allow_html=True)
 
 if not showed_any:
-    # If none of the fixed categories matched, show other available categories (if any)
     if len(available_categories) > 0:
         st.subheader("Other categories available for this OTA")
         for c in available_categories:
@@ -224,4 +226,4 @@ with st.expander("Show raw row for selected OTA"):
 
 # ---------- Footer guidance ----------
 st.markdown("---")
-# removed caption.")
+st.caption("If you deploy from GitHub, change EXCEL_PATHS to include 'XY.xlsx' as needed.")
