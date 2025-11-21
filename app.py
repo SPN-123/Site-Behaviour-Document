@@ -1,4 +1,4 @@
-# app.py - final (search box for key; shows values only)
+# app.py - final corrected version
 import streamlit as st
 import pandas as pd
 import os
@@ -10,8 +10,35 @@ EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # prefer repo file, fallback to 
 SHEET_NAME = "Sheet1"  # default sheet to use silently when available
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
-st.title("🔎 OTA Knowledge Search Tool")
-st.write("Type an OTA name in the box, choose the match, then select a category button for that OTA.")
+
+# ---------- Minimal CSS for nicer look ----------
+st.markdown("""
+<style>
+.header-row { display:flex; align-items:center; gap:14px; }
+.title { font-size:36px; font-weight:800; margin:0; }
+.subtitle { color:#555; margin-top:2px; }
+.card { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 5px rgba(0,0,0,0.06); }
+.kv { font-weight:600; color:#0b6cff; }
+.badge { background:#eefaf1; color:#067a46; padding:6px 10px; border-radius:8px; font-weight:600; }
+.small-muted { color:#777; font-size:13px; }
+.btn-pill { background:#f3f6ff; padding:8px 12px; border-radius:999px; display:inline-block; margin-right:6px; margin-bottom:6px; }
+.detail-card { background:#fbfcff; border-left:4px solid #e6eefc; padding:10px; border-radius:8px; margin-bottom:8px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------- Header ----------
+col1, col2 = st.columns([6,2])
+with col1:
+    st.markdown(
+        '<div class="header-row"><span style="font-size:36px">🔎</span>'
+        '<div><h1 class="title">OTA Knowledge Search Tool</h1>'
+        '<div class="subtitle">Search OTA entries and inspect values inside the Detail column.</div></div></div>',
+        unsafe_allow_html=True
+    )
+with col2:
+    st.markdown('<div style="text-align:right"><span class="badge">Tip: type partial OTA name</span></div>', unsafe_allow_html=True)
+
+st.write("")  # spacer
 
 # ---------- Helpers ----------
 def find_excel(paths: List[str]):
@@ -82,7 +109,7 @@ if df is None or df.empty:
     st.error("Loaded dataframe is empty. Check the Excel file and sheet name.")
     st.stop()
 
-# ---------- Detect structure ----------
+# ---------- Detect columns ----------
 cols = list(df.columns)
 lower_map = {c.lower(): c for c in cols}
 ota_col = lower_map.get("otaname") or lower_map.get("ota name") or cols[0]
@@ -124,7 +151,13 @@ else:
                 detected_keys.append(k)
     if detected_keys:
         st.write("**Detected keys:**")
-        badges = "".join([f\"<span style='display:inline-block;background:#eef6ff;padding:6px 10px;border-radius:999px;margin-right:6px;margin-bottom:6px'>{k}</span>\" for k in detected_keys])
+        # build HTML badges safely
+        badge_html_parts = []
+        for k in detected_keys:
+            # escape minimal HTML sensitive characters in key (simple replace)
+            safe_k = str(k).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            badge_html_parts.append(f"<span style='display:inline-block;background:#eef6ff;padding:6px 10px;border-radius:999px;margin-right:6px;margin-bottom:6px'>{safe_k}</span>")
+        badges = "".join(badge_html_parts)
         st.markdown(badges, unsafe_allow_html=True)
 
     with st.expander("Show raw Detail rows"):
@@ -164,4 +197,4 @@ with st.expander("Show raw rows for selected OTA"):
 
 # ---------- Footer guidance ----------
 st.markdown("---")
-st.caption("If you deploy from GitHub, place XY.xlsx in the repo root or update EXCEL_PATHS.")
+st.caption("If you deploy from GitHub, ensure 'XY.xlsx' is in the repo root or update EXCEL_PATHS.")
