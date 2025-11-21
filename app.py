@@ -1,4 +1,4 @@
-# app.py
+# app.py - prettier UI version
 import streamlit as st
 import pandas as pd
 import os
@@ -6,12 +6,37 @@ import re
 from typing import List
 
 # ---------- CONFIG ----------
-EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # repo path first, session path fallback
-SHEET_NAME = "Sheet1"  # prefer this sheet silently if present
+EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # prefer repo file, fallback to session path
+SHEET_NAME = "Sheet1"  # used silently if present
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
-st.title("🔎 OTA Knowledge Search Tool")
-st.write("Type an OTA name in the box, choose the match, then select a category button for that OTA.")
+
+# ---------- Minimal CSS for nicer look ----------
+st.markdown("""
+<style>
+.header-row { display:flex; align-items:center; gap:14px; }
+.title { font-size:36px; font-weight:800; margin:0; }
+.subtitle { color:#555; margin-top:2px; }
+.card { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 5px rgba(0,0,0,0.06); }
+.kv { font-weight:600; color:#0b6cff; }
+.badge { background:#eefaf1; color:#067a46; padding:6px 10px; border-radius:8px; font-weight:600 }
+.small-muted { color:#777; font-size:13px; }
+.btn-pill { background:#f3f6ff; padding:8px 12px; border-radius:999px; display:inline-block; margin-right:6px; margin-bottom:6px; }
+.detail-card { background:#fbfcff; border-left:4px solid #e6eefc; padding:10px; border-radius:8px; margin-bottom:8px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------- Header ----------
+col1, col2 = st.columns([6,2])
+with col1:
+    st.markdown('<div class="header-row"><span style="font-size:36px">🔎</span>'
+                '<div><h1 class="title">OTA Knowledge Search Tool</h1>'
+                '<div class="subtitle">Search OTA entries and inspect values inside the Detail column.</div></div></div>',
+                unsafe_allow_html=True)
+with col2:
+    st.markdown('<div style="text-align:right"><span class="badge">Tip: type partial OTA name</span></div>', unsafe_allow_html=True)
+
+st.write("")  # small spacer
 
 # ---------- Helpers ----------
 def find_excel(paths: List[str]):
@@ -20,26 +45,20 @@ def find_excel(paths: List[str]):
             return p
     return None
 
-def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Excel file not found at: {path}")
-    try:
-        if sheet_name is None:
-            return pd.read_excel(path)
-        return pd.read_excel(path, sheet_name=sheet_name)
-    except Exception as e:
-        raise RuntimeError(f"Failed to read Excel file: {e}") from e
-
 @st.cache_data
-def load_df_cached(path: str, sheet_name: str = None) -> pd.DataFrame:
-    return read_excel_safe(path, sheet_name)
+def load_excel(path_or_file, sheet_name=None):
+    if isinstance(path_or_file, str):
+        if not os.path.exists(path_or_file):
+            raise FileNotFoundError(f"File not found: {path_or_file}")
+        return pd.read_excel(path_or_file, sheet_name=sheet_name)
+    else:
+        xls = pd.ExcelFile(path_or_file)
+        if sheet_name and sheet_name in xls.sheet_names:
+            return pd.read_excel(xls, sheet_name=sheet_name)
+        return pd.read_excel(xls, sheet_name=0)
 
 def extract_key_values(text: str) -> dict:
-    """
-    Extract key:value pairs from a free-text detail string.
-    Returns dict {lower_key: value}.
-    Pattern matches 'Key: Value' until next separator (; , or newline) or end.
-    """
+    """Return dict of lower_key -> value for patterns like Key: Value"""
     results = {}
     if not isinstance(text, str):
         return results
@@ -50,29 +69,25 @@ def extract_key_values(text: str) -> dict:
         results[key] = val
     return results
 
-# ---------- Load Data (prefer repo, else uploader) ----------
-df = None
-found_path = find_excel(EXCEL_PATHS)
-
-if found_path:
-    # silently pick preferred sheet (no banner / selectbox shown)
+# ---------- Load workbook (silently choose sheet) ----------
+found = find_excel(EXCEL_PATHS)
+if found:
     try:
-        xls = pd.ExcelFile(found_path)
+        xls = pd.ExcelFile(found)
     except Exception as e:
         st.error(f"Error reading workbook: {e}")
         st.stop()
     sheet_list = xls.sheet_names
     chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
     try:
-        df = load_df_cached(found_path, chosen_sheet)
+        df = load_excel(found, sheet_name=chosen_sheet)
     except Exception as e:
         st.error(f"Failed to load sheet '{chosen_sheet}': {e}")
         st.stop()
 else:
-    # fallback uploader (visible)
-    uploaded = st.file_uploader("Upload XY.xlsx (fallback)", type=["xlsx"])
+    uploaded = st.file_uploader("Upload XY.xlsx", type=["xlsx"], help="Workbook must contain OTAName and Detail columns")
     if uploaded is None:
-        st.info("Please upload the XY.xlsx file or place it in the repo root as 'XY.xlsx'.")
+        st.info("Upload XY.xlsx or place it in the repo root as 'XY.xlsx'.")
         st.stop()
     try:
         xls = pd.ExcelFile(uploaded)
@@ -81,107 +96,92 @@ else:
         st.stop()
     sheet_list = xls.sheet_names
     chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
-    try:
-        df = pd.read_excel(xls, sheet_name=chosen_sheet)
-    except Exception as e:
-        st.error(f"Error reading uploaded file sheet '{chosen_sheet}': {e}")
-        st.stop()
+    df = pd.read_excel(xls, sheet_name=chosen_sheet)
 
-# Basic validation
 if df is None or df.empty:
-    st.error("Loaded dataframe is empty. Check the Excel file and sheet name.")
+    st.error("Selected sheet is empty. Please check the Excel file.")
     st.stop()
 
-# ---------- Detect structure ----------
+# ---------- Detect columns ----------
 cols = list(df.columns)
 lower_map = {c.lower(): c for c in cols}
+ota_col = lower_map.get("otaname") or lower_map.get("ota name") or cols[0]
+detail_col = lower_map.get("detail") or lower_map.get("details") or (cols[1] if len(cols) > 1 and cols[1] != ota_col else ota_col)
 
-# OTA column detection
-if "otaname" in lower_map:
-    ota_col = lower_map["otaname"]
-elif "ota name" in lower_map:
-    ota_col = lower_map["ota name"]
-else:
-    ota_col = cols[0]
-
-# Detail column detection
-if "detail" in lower_map:
-    detail_col = lower_map["detail"]
-elif "details" in lower_map:
-    detail_col = lower_map["details"]
-else:
-    # fallback to second column if present
-    if len(cols) >= 2:
-        detail_col = cols[1] if cols[1] != ota_col else cols[0]
-    else:
-        detail_col = ota_col
-
-# normalize strings used for matching
+# normalize
 df[ota_col] = df[ota_col].astype(str).str.strip()
 df[detail_col] = df[detail_col].astype(str)
 
-# Build OTA list
-ota_list = sorted(df[ota_col].dropna().unique(), key=str.lower)
+# ---------- Search UI (presentable) ----------
+search_col, meta_col = st.columns([3,1])
+with search_col:
+    search_query = st.text_input("OTA name", placeholder="Type partial OTA name (e.g. Expedia)")
+    matches = sorted(df[ota_col].dropna().unique(), key=lambda x: x.lower())
+    if search_query:
+        matches = [m for m in matches if search_query.lower() in str(m).lower()]
+    if not matches:
+        st.warning("No matching OTA found.")
+        st.stop()
+    selected_ota = st.selectbox("Select OTA", options=matches)
+with meta_col:
+    st.markdown(f"<div class='card small-muted'>Sheet: <span class='kv'>{chosen_sheet}</span><br>Rows: <span class='kv'>{len(df)}</span></div>", unsafe_allow_html=True)
 
-# ---------- UI: Search & select OTA ----------
-st.subheader("Search OTA")
-query = st.text_input("OTA name (type part or full name):").strip()
+st.markdown("---")
+st.markdown(f"### Details for <span style='color:#0b6cff'>{selected_ota}</span>", unsafe_allow_html=True)
 
-matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
-
-if not matches:
-    st.warning("No matching OTA found. Try a different search term.")
-    st.stop()
-
-# keep the OTA selectbox visible (as you requested)
-selected_ota = st.selectbox("Select OTA from matches", matches)
-
-# ---------- Show details & second search box ----------
-rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
-
-st.markdown(f"### Details for **{selected_ota}**")
-
+# ---------- Show details & detected keys ----------
+rows = df[df[ota_col].str.strip().str.lower() == str(selected_ota).strip().lower()]
 if rows.empty:
-    st.info("No details found for the selected OTA.")
+    st.info("No details found for this OTA.")
 else:
-    # gather detail texts from all matching rows
     detail_texts = rows[detail_col].fillna("").astype(str).tolist()
 
-    # show raw detail rows collapsed (keeps previous behavior)
+    # detected keys badges
+    detected_keys = []
+    for t in detail_texts:
+        kv = extract_key_values(t)
+        for k in kv.keys():
+            if k not in detected_keys:
+                detected_keys.append(k)
+    if detected_keys:
+        st.write("**Detected keys:**")
+        badges = "".join([f"<span class='btn-pill'>{k}</span>" for k in detected_keys])
+        st.markdown(badges, unsafe_allow_html=True)
+
+    # raw details collapsed
     with st.expander("Show raw Detail rows"):
-        for i, t in enumerate(detail_texts, start=1):
-            st.write(f"**{i}.** {t}")
+        st.write(rows[[ota_col, detail_col]].reset_index(drop=True))
 
-    # second search box: user enters the key name (text before ':')
-    st.subheader("Search detail key")
-    key_query = st.text_input("Enter detail key (e.g. ChannelId, Allocation, Sell Code):").strip().lower()
-
-    if key_query:
-        extracted = []
-        for t in detail_texts:
-            kv = extract_key_values(t)
-            if key_query in kv:
-                extracted.append(kv[key_query])
-        if not extracted:
-            st.info(f"No value found for key '{key_query}' in the Detail column for this OTA.")
+    # second search - autocomplete + display
+    key_col, val_col = st.columns([2,3])
+    with key_col:
+        if detected_keys:
+            pick = st.selectbox("Choose key (or Custom)", options=["-- Custom --"] + detected_keys)
+            if pick == "-- Custom --":
+                key_input = st.text_input("Custom key (e.g. ChannelId)").strip().lower()
+            else:
+                key_input = pick.strip().lower()
         else:
-            st.markdown(f"**Values for '{key_query}':**")
-            # show unique values preserving order
-            seen = set()
-            uniq = []
-            for v in extracted:
-                if v not in seen:
-                    uniq.append(v)
-                    seen.add(v)
-            for i, v in enumerate(uniq, start=1):
-                st.write(f"{i}. {v}")
-    else:
-        st.info("Enter a detail key in the second search box to extract its value from the Detail column.")
+            key_input = st.text_input("Detail key (e.g. ChannelId)").strip().lower()
 
-# ---------- Raw rows expander ----------
-with st.expander("Show raw rows for selected OTA"):
-    st.dataframe(rows.reset_index(drop=True))
+    with val_col:
+        if key_input:
+            extracted = []
+            for t in detail_texts:
+                kv = extract_key_values(t)
+                if key_input in kv:
+                    extracted.append(kv[key_input])
+            if not extracted:
+                st.info(f"No value found for key '{key_input}'.")
+            else:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown(f"**Values for '{key_input}':**")
+                for i, v in enumerate(dict.fromkeys(extracted).keys(), start=1):
+                    st.markdown(f"<div class='detail-card'><strong>{i}.</strong> {v}</div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='small-muted'>Select or enter a key to extract values.</div>", unsafe_allow_html=True)
 
-# ---------- Footer guidance ----------
+# ---------- Footer ----------
 st.markdown("---")
-st.caption("If you deploy from GitHub, ensure 'XY.xlsx' is in the repo root or update EXCEL_PATHS accordingly.")
+st.caption("UI updated — tell me if you want different colors, more compact spacing, or an export button.")
