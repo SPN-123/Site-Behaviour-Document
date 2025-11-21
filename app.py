@@ -1,133 +1,187 @@
+# app.py
 import streamlit as st
 import pandas as pd
+import os
 import re
+from typing import List
 
-# ---------- Configuration ----------
-HEADER_IMAGE = "/mnt/data/750844b1-1540-4977-a219-0b2e2d3a5b56.png"
-PAGE_TITLE = "OTA Knowledge Search Tool"
+# ---------- CONFIG ----------
+EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # repo path first, session path fallback
+SHEET_NAME = "Sheet1"  # prefer this sheet silently if present
 
-# ---------- Utility helpers ----------
-def strip_leading_number(text: str) -> str:
-    """Remove leading numbers and punctuation (e.g. '1.EXPG' -> 'EXPG')."""
-    return re.sub(r"^\s*\d+[\s\.-:_]*", "", str(text)).strip()
+st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
+st.title("🔎 OTA Knowledge Search Tool")
+st.write("Type an OTA name in the box, choose the match, then select a category button for that OTA.")
 
-def load_data():
-    """Mock dataset — replace with your actual Excel load."""
-    data = {
-        "OTA": ["Booking.com", "Booking.com", "Agoda", "MakeMyTrip", "Expedia"],
-        "Detail": [
-            "1.EXPG: channelid=123; available=10",
-            "2.RATE: sell_code=ABC; allocation=5",
-            "1.EXPG: channelid=777; available=3",
-            "3.INFO: sell_code=ZZZ; allocation=1",
-            "1.EXPG: channelid=999; available=7"
-        ],
-    }
-    return pd.DataFrame(data)
+# ---------- Helpers ----------
+def find_excel(paths: List[str]):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
 
-# ---------- Streamlit page config ----------
-st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+def read_excel_safe(path: str, sheet_name=None) -> pd.DataFrame:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Excel file not found at: {path}")
+    try:
+        if sheet_name is None:
+            return pd.read_excel(path)
+        return pd.read_excel(path, sheet_name=sheet_name)
+    except Exception as e:
+        raise RuntimeError(f"Failed to read Excel file: {e}") from e
 
-# CSS styling
-st.markdown("""
-<style>
-.header-row {display:flex; align-items:center; gap:16px}
-.logo-img {height:68px; border-radius:8px}
-.big-title {font-size:32px; font-weight:700; margin:0}
-.muted {color:#6b7280}
-.det-chip {display:inline-block; padding:6px 10px; border-radius:999px; background:#eef2ff; margin:4px;}
-</style>
-""", unsafe_allow_html=True)
+@st.cache_data
+def load_df_cached(path: str, sheet_name: str = None) -> pd.DataFrame:
+    return read_excel_safe(path, sheet_name)
 
-# ---------- Header ----------
-col1, col2 = st.columns([6, 4])
-with col1:
-    st.markdown(f"""
-    <div class='header-row'>
-        <img src='{HEADER_IMAGE}' class='logo-img'/>
-        <div>
-            <h1 class='big-title'>{PAGE_TITLE}</h1>
-            <div class='muted'>Search OTA entries and inspect values inside the Detail column.</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+def extract_key_values(text: str) -> dict:
+    """
+    Extract key:value pairs from a free-text detail string.
+    Returns dict {lower_key: value}.
+    Pattern matches 'Key: Value' until next separator (; , or newline) or end.
+    """
+    results = {}
+    if not isinstance(text, str):
+        return results
+    pattern = re.compile(r"([A-Za-z0-9_\- ]+?)\s*:\s*([^;\n\r,]+)")
+    for m in pattern.finditer(text):
+        key = m.group(1).strip().lower()
+        val = m.group(2).strip()
+        results[key] = val
+    return results
 
-with col2:
-    st.markdown("**Sheet:** Sheet1<br>**Rows:** 38", unsafe_allow_html=True)
+# ---------- Load Data (prefer repo, else uploader) ----------
+df = None
+found_path = find_excel(EXCEL_PATHS)
 
-st.markdown("---")
+if found_path:
+    # silently pick preferred sheet (no banner / selectbox shown)
+    try:
+        xls = pd.ExcelFile(found_path)
+    except Exception as e:
+        st.error(f"Error reading workbook: {e}")
+        st.stop()
+    sheet_list = xls.sheet_names
+    chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
+    try:
+        df = load_df_cached(found_path, chosen_sheet)
+    except Exception as e:
+        st.error(f"Failed to load sheet '{chosen_sheet}': {e}")
+        st.stop()
+else:
+    # fallback uploader (visible)
+    uploaded = st.file_uploader("Upload XY.xlsx (fallback)", type=["xlsx"])
+    if uploaded is None:
+        st.info("Please upload the XY.xlsx file or place it in the repo root as 'XY.xlsx'.")
+        st.stop()
+    try:
+        xls = pd.ExcelFile(uploaded)
+    except Exception as e:
+        st.error(f"Error reading uploaded workbook: {e}")
+        st.stop()
+    sheet_list = xls.sheet_names
+    chosen_sheet = SHEET_NAME if SHEET_NAME in sheet_list else sheet_list[0]
+    try:
+        df = pd.read_excel(xls, sheet_name=chosen_sheet)
+    except Exception as e:
+        st.error(f"Error reading uploaded file sheet '{chosen_sheet}': {e}")
+        st.stop()
 
-# ---------- Controls ----------
-controls_col, results_col = st.columns([4, 8])
+# Basic validation
+if df is None or df.empty:
+    st.error("Loaded dataframe is empty. Check the Excel file and sheet name.")
+    st.stop()
 
-with controls_col:
-    # 1) OTA name search (partial match)
-    ota_search = st.text_input("Search OTA name", "", placeholder="Type partial OTA name (e.g. 'book')")
+# ---------- Detect structure ----------
+cols = list(df.columns)
+lower_map = {c.lower(): c for c in cols}
 
-    # Load data and derive OTA list
-    df = load_data()
-    all_otas = sorted(df["OTA"].unique())
+# OTA column detection
+if "otaname" in lower_map:
+    ota_col = lower_map["otaname"]
+elif "ota name" in lower_map:
+    ota_col = lower_map["ota name"]
+else:
+    ota_col = cols[0]
 
-    matching_otas = [o for o in all_otas if ota_search.lower() in o.lower()] if ota_search else all_otas
-    if not matching_otas:
-        matching_otas = all_otas  # fallback
-
-    # 2) OTA select
-    selected_ota = st.selectbox("Select OTA", matching_otas)
-
-    st.markdown("---")
-
-    # 3) NEW: Search inside Detail values (filters detected keys + rows)
-    detail_search = st.text_input("Search inside details", "", placeholder="Filter detail rows by text (e.g. 'channelid' or 'available')")
-
-    st.markdown("---")
-    show_raw = st.checkbox("Show raw Detail rows", False)
-
-with results_col:
-    st.subheader(f"Details for {selected_ota}")
-
-    # Filter rows for selected OTA
-    ota_rows = df[df["OTA"] == selected_ota].copy()
-
-    # If user provided a detail_search, further filter rows that contain that substring (case-insensitive)
-    if detail_search:
-        ota_rows = ota_rows[ota_rows["Detail"].str.contains(detail_search, case=False, na=False)]
-
-    # Collect detected keys heuristically from Detail column
-    detected_keys = set()
-    details_parsed = []
-    for _, row in ota_rows.iterrows():
-        detail = row["Detail"]
-        parts = [p.strip() for p in re.split(r"[;,\|]", detail) if p.strip()]
-        for p in parts:
-            key = re.split(r"[:=]", p)[0].strip()
-            if key:
-                detected_keys.add(key)
-        details_parsed.append(detail)
-
-    # Show chips for detected keys (strip numbers like '1.EXPG' -> 'EXPG')
-    if detected_keys:
-        st.markdown("**Detected keys:**")
-        chips = "".join([f"<span class='det-chip'>{strip_leading_number(k)}</span>" for k in sorted(detected_keys)])
-        st.markdown(chips, unsafe_allow_html=True)
+# Detail column detection
+if "detail" in lower_map:
+    detail_col = lower_map["detail"]
+elif "details" in lower_map:
+    detail_col = lower_map["details"]
+else:
+    # fallback to second column if present
+    if len(cols) >= 2:
+        detail_col = cols[1] if cols[1] != ota_col else cols[0]
     else:
-        st.info("No keys detected for the selected OTA (or no rows match your filters).")
+        detail_col = ota_col
 
-    st.markdown("---")
+# normalize strings used for matching
+df[ota_col] = df[ota_col].astype(str).str.strip()
+df[detail_col] = df[detail_col].astype(str)
 
-    # Show parsed details inline (keeps everything on same page)
-    if details_parsed:
-        for i, detail in enumerate(details_parsed, start=1):
-            clean = strip_leading_number(detail)
-            with st.expander(f"Detail row {i}: {clean.split(':')[0]}", expanded=False):
-                st.write(clean)
+# Build OTA list
+ota_list = sorted(df[ota_col].dropna().unique(), key=str.lower)
+
+# ---------- UI: Search & select OTA ----------
+st.subheader("Search OTA")
+query = st.text_input("OTA name (type part or full name):").strip()
+
+matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
+
+if not matches:
+    st.warning("No matching OTA found. Try a different search term.")
+    st.stop()
+
+# keep the OTA selectbox visible (as you requested)
+selected_ota = st.selectbox("Select OTA from matches", matches)
+
+# ---------- Show details & second search box ----------
+rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
+
+st.markdown(f"### Details for **{selected_ota}**")
+
+if rows.empty:
+    st.info("No details found for the selected OTA.")
+else:
+    # gather detail texts from all matching rows
+    detail_texts = rows[detail_col].fillna("").astype(str).tolist()
+
+    # show raw detail rows collapsed (keeps previous behavior)
+    with st.expander("Show raw Detail rows"):
+        for i, t in enumerate(detail_texts, start=1):
+            st.write(f"**{i}.** {t}")
+
+    # second search box: user enters the key name (text before ':')
+    st.subheader("Search detail key")
+    key_query = st.text_input("Enter detail key (e.g. ChannelId, Allocation, Sell Code):").strip().lower()
+
+    if key_query:
+        extracted = []
+        for t in detail_texts:
+            kv = extract_key_values(t)
+            if key_query in kv:
+                extracted.append(kv[key_query])
+        if not extracted:
+            st.info(f"No value found for key '{key_query}' in the Detail column for this OTA.")
+        else:
+            st.markdown(f"**Values for '{key_query}':**")
+            # show unique values preserving order
+            seen = set()
+            uniq = []
+            for v in extracted:
+                if v not in seen:
+                    uniq.append(v)
+                    seen.add(v)
+            for i, v in enumerate(uniq, start=1):
+                st.write(f"{i}. {v}")
     else:
-        st.write("_No detail rows to display._")
+        st.info("Enter a detail key in the second search box to extract its value from the Detail column.")
 
-    # Optionally show raw rows in a compact table
-    if show_raw:
-        st.markdown("**Raw Detail rows**")
-        st.dataframe(ota_rows.reset_index(drop=True))
+# ---------- Raw rows expander ----------
+with st.expander("Show raw rows for selected OTA"):
+    st.dataframe(rows.reset_index(drop=True))
 
+# ---------- Footer guidance ----------
 st.markdown("---")
-st.caption("Tip: Use the OTA search to narrow the list, pick an OTA, then use 'Search inside details' to filter specific keys or values.")
+st.caption("If you deploy from GitHub, ensure 'XY.xlsx' is in the repo root or update EXCEL_PATHS accordingly.")
