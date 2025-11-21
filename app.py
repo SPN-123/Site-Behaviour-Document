@@ -1,4 +1,5 @@
-# app.py (UI: hide select control, align values above Detail Key)
+
+# app.py (UI: value aligned directly above Detail Key input)
 import streamlit as st
 import pandas as pd
 import os
@@ -6,12 +7,12 @@ import re
 from typing import List
 
 # ---------- CONFIG ----------
-EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]
+EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx", "/mnt/data/app.py"]
 SHEET_NAME = "Sheet1"
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
 
-# ---------- Styling (compact) ----------
+# ---------- Styling (compact + value alignment) ----------
 st.markdown(
     """
     <style>
@@ -28,6 +29,10 @@ st.markdown(
     .hidden-select {display:none;}
     /* small box to show the auto-selected OTA in a similar visual style to inputs */
     .selected-ota-box {background:#f3f4f6; padding:10px 12px; border-radius:8px; border:1px solid rgba(0,0,0,0.03); margin-bottom:8px;}
+    /* value box style matches input width and spacing */
+    .value-box {background:#ffffff; padding:10px 12px; border-radius:8px; border:1px solid rgba(0,0,0,0.06); margin-bottom:6px; min-height:42px; display:flex; align-items:center;}
+    /* reduce gap between controls */
+    .control-block {margin-bottom:6px;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -59,24 +64,18 @@ def load_df_cached(path: str, sheet_name: str = None) -> pd.DataFrame:
     return read_excel_safe(path, sheet_name)
 
 def extract_key_values(text: str) -> dict:
-    """
-    Robust extraction of key/value pairs from a free-text detail string.
-    - Extracts key=value pairs anywhere (e.g. channelid=1011)
-    - Also extracts Key: value tokens (e.g. EXPG: ...)
-    Returns dict mapping lowercase-key -> value (string).
-    """
     results = {}
     if not isinstance(text, str):
         return results
 
-    # extract key=value pairs first
-    for m in re.finditer(r"([A-Za-z0-9_\-]+)\s*=\s*([^;,\n\r]+)", text):
+    # Extract key=value pairs
+    for m in re.finditer(r"([A-Za-z0-9_\\-]+)\\s*=\\s*([^;,\\n\\r]+)", text):
         k = m.group(1).strip().lower()
         v = m.group(2).strip()
         results[k] = v
 
-    # also extract 'Key: value' tokens (if not overriding existing key=value)
-    for m in re.finditer(r"([A-Za-z0-9_\-]+)\s*:\s*([^;\n\r]+)", text):
+    # Extract 'Key: value' tokens
+    for m in re.finditer(r"([A-Za-z0-9_\\-]+)\\s*:\\s*([^;\\n\\r]+)", text):
         primary_key = m.group(1).strip().lower()
         primary_val = m.group(2).strip()
         if primary_key not in results:
@@ -153,8 +152,7 @@ ota_list = sorted(df[ota_col].dropna().unique(), key=str.lower)
 left_col, right_col = st.columns([3, 7])
 
 with left_col:
-    st.markdown("**Search OTA**")
-    # OTA search input — user types partial/full name
+    st.markdown("<div class='control-block'><strong>Search OTA</strong></div>", unsafe_allow_html=True)
     query = st.text_input("OTA name (type part or full):", value="").strip()
     matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
 
@@ -162,30 +160,21 @@ with left_col:
         st.warning("No matching OTA found. Try a different search term.")
         st.stop()
 
-    # Auto-select best match (first match). We do NOT show the select dropdown.
     selected_ota = matches[0]
-
-    # Show selected OTA as a simple readonly-looking box (no caret/dropdown)
     st.markdown(f"<div class='selected-ota-box'>{selected_ota}</div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    # Place where values (for a searched key) will appear BEFORE the detail-key input:
-    st.markdown("**Value(s) found (for the key you enter below):**")
-    # We'll fill this area after computing below; for now reserve a small placeholder container
+    st.markdown("<div class='control-block'><strong>Value(s) found (for the key you enter below):</strong></div>", unsafe_allow_html=True)
     value_container = st.container()
 
-    st.markdown("---")
-
-    st.markdown("**Search inside details**")
-    # Detail key input (user asks e.g. channelid or allocation)
+    st.markdown("<div class='control-block'><strong>Search inside details</strong></div>", unsafe_allow_html=True)
+    # place key_input and value display in same visual column, aligned
     key_query = st.text_input("Detail key (e.g. channelid, allocation):").strip().lower()
 
     st.markdown("---")
     show_raw_toggle = st.checkbox("Show raw Detail rows (expanded below)", value=False)
     show_debug = st.checkbox("Show debug: row indices for each found value", value=False)
 
-# compute rows and parsed results (available to both columns)
+# compute parsed results
 rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
 parsed_results = []
 for idx, r in rows.reset_index().iterrows():
@@ -194,7 +183,7 @@ for idx, r in rows.reset_index().iterrows():
     kv = extract_key_values(raw_text)
     parsed_results.append((orig_idx, raw_text, kv))
 
-# fill the value container with found values (placed above detail-key input)
+# Fill the value container so it appears just above the Detail Key input visually
 with value_container:
     if key_query:
         found_values = []
@@ -202,29 +191,28 @@ with value_container:
             if key_query in kv:
                 found_values.append((orig_idx, kv[key_query], raw_text))
         if not found_values:
-            st.write("_No value found yet — enter a key and press Enter._")
+            st.markdown("<div class='value-box'>_No value found yet — enter a key and press Enter._</div>", unsafe_allow_html=True)
         else:
-            # show values only (no numbering), each on its own line
+            # show values inside a value-box div to align with input width
+            # join multiple unique values with a comma if more than one
+            unique_vals = []
             seen = set()
             for orig_idx, val, raw_text in found_values:
-                if val in seen:
-                    continue
-                seen.add(val)
-                if show_debug and orig_idx is not None:
-                    st.write(f"{val}  (source row: {orig_idx})")
-                else:
-                    st.write(val)
+                if val not in seen:
+                    unique_vals.append(val)
+                    seen.add(val)
+            display_text = ", ".join(unique_vals)
+            st.markdown(f"<div class='value-box'>{display_text}</div>", unsafe_allow_html=True)
     else:
-        st.write("_Enter a detail key to see values here._")
+        st.markdown("<div class='value-box'>_Enter a detail key to see values here._</div>", unsafe_allow_html=True)
 
-# Right column: keep details header and raw rows expander
+# Right column: Detected keys + raw rows
 with right_col:
     st.markdown(f"### Details for **{selected_ota}**")
 
     if not parsed_results:
         st.info("No detail rows found for the selected OTA.")
     else:
-        # show detected keys summary on right (no change)
         all_keys = []
         for _, _, kv in parsed_results:
             for k in kv.keys():
