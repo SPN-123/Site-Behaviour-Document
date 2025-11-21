@@ -1,4 +1,4 @@
-# app.py
+# app.py (UI-tidy version)
 import streamlit as st
 import pandas as pd
 import os
@@ -10,8 +10,34 @@ EXCEL_PATHS = ["XY.xlsx", "/mnt/data/XY.xlsx"]  # repo path first, session path 
 SHEET_NAME = "Sheet1"  # prefer this sheet silently if present
 
 st.set_page_config(page_title="OTA Knowledge Search Tool", layout="wide")
-st.title("🔎 OTA Knowledge Search Tool")
-st.write("Type an OTA name in the box, choose the match, then select a category button for that OTA.")
+
+# ---------- Small styling to reduce whitespace and align content ----------
+st.markdown(
+    """
+    <style>
+    /* Tighten global paddings */
+    .css-12oz5g7 {padding-top: 0rem;}  /* page top gap */
+    .css-1d391kg {padding: 0.5rem 1rem;} /* main container padding */
+    /* Header and small title */
+    .small-title {font-size:20px; font-weight:700; margin:0; padding-bottom:4px;}
+    .muted {color:#6b7280; margin-top:0;}
+    /* Compact controls */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div>select {height:38px;}
+    /* Chips */
+    .det-chip {display:inline-block; padding:5px 10px; border-radius:999px; background:#eef2ff; margin:4px; font-size:13px;}
+    /* Reduce expander padding */
+    .streamlit-expanderHeader {padding: 6px 12px;}
+    /* Dataframe compact */
+    .stDataFrame {padding:6px 0;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Small header (keeps things compact)
+st.markdown("<div class='small-title'>🔎 OTA Knowledge Search Tool</div>", unsafe_allow_html=True)
+st.markdown("<div class='muted'>Type an OTA name, choose the match, then search inside details.</div>", unsafe_allow_html=True)
+st.markdown("---")
 
 # ---------- Helpers ----------
 def find_excel(paths: List[str]):
@@ -123,63 +149,88 @@ df[detail_col] = df[detail_col].astype(str)
 # Build OTA list
 ota_list = sorted(df[ota_col].dropna().unique(), key=str.lower)
 
-# ---------- UI: Search & select OTA ----------
-st.subheader("Search OTA")
-query = st.text_input("OTA name (type part or full name):").strip()
+# ---------- Compact two-column layout: controls left, results right ----------
+left_col, right_col = st.columns([3, 7])
 
-matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
+with left_col:
+    st.markdown("**Search OTA**")
+    query = st.text_input("OTA name (type part or full):", value="").strip()
+    matches = [o for o in ota_list if query.lower() in o.lower()] if query else ota_list
 
-if not matches:
-    st.warning("No matching OTA found. Try a different search term.")
-    st.stop()
+    if not matches:
+        st.warning("No matching OTA found. Try a different search term.")
+        st.stop()
 
-# keep the OTA selectbox visible (as you requested)
-selected_ota = st.selectbox("Select OTA from matches", matches)
+    # keep the OTA selectbox visible (as you requested)
+    selected_ota = st.selectbox("Select OTA from matches", matches, index=0)
 
-# ---------- Show details & second search box ----------
-rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
+    st.markdown("---")
+    st.markdown("**Search inside details**")
+    key_query = st.text_input("Detail key (e.g. ChannelId, Allocation):").strip().lower()
 
-st.markdown(f"### Details for **{selected_ota}**")
+    st.markdown("---")
+    show_raw_toggle = st.checkbox("Show raw Detail rows (expanded below)", value=False)
+    st.markdown("")  # tiny spacer to keep compact
 
-if rows.empty:
-    st.info("No details found for the selected OTA.")
-else:
-    # gather detail texts from all matching rows
-    detail_texts = rows[detail_col].fillna("").astype(str).tolist()
+with right_col:
+    rows = df[df[ota_col].str.strip().str.lower() == selected_ota.strip().lower()]
+    st.markdown(f"### Details for **{selected_ota}**")
 
-    # show raw detail rows collapsed (keeps previous behavior)
-    with st.expander("Show raw Detail rows"):
-        for i, t in enumerate(detail_texts, start=1):
-            st.write(f"**{i}.** {t}")
+    if rows.empty:
+        st.info("No details found for the selected OTA.")
+    else:
+        # gather detail texts from all matching rows
+        detail_texts = rows[detail_col].fillna("").astype(str).tolist()
 
-    # second search box: user enters the key name (text before ':')
-    st.subheader("Search detail key")
-    key_query = st.text_input("Enter detail key (e.g. ChannelId, Allocation, Sell Code):").strip().lower()
-
-    if key_query:
-        extracted = []
+        # Parse and optionally filter by key_query
+        parsed_results = []
+        shown_rows = []
         for t in detail_texts:
             kv = extract_key_values(t)
-            if key_query in kv:
-                extracted.append(kv[key_query])
-        if not extracted:
-            st.info(f"No value found for key '{key_query}' in the Detail column for this OTA.")
-        else:
-            st.markdown(f"**Values for '{key_query}':**")
-            # show unique values preserving order
-            seen = set()
-            uniq = []
-            for v in extracted:
-                if v not in seen:
-                    uniq.append(v)
-                    seen.add(v)
-            for i, v in enumerate(uniq, start=1):
-                st.write(f"{i}. {v}")
-    else:
-        st.info("Enter a detail key in the second search box to extract its value from the Detail column.")
+            parsed_results.append((t, kv))
+            shown_rows.append(t)
 
-# ---------- Raw rows expander ----------
-with st.expander("Show raw rows for selected OTA"):
+        # If user searched a key, gather matches and show compact list
+        if key_query:
+            extracted = []
+            for t, kv in parsed_results:
+                if key_query in kv:
+                    extracted.append(kv[key_query])
+            if not extracted:
+                st.info(f"No value found for key '{key_query}' in the Detail column for this OTA.")
+            else:
+                st.markdown(f"**Values for '{key_query}':**")
+                seen = set()
+                uniq = []
+                for v in extracted:
+                    if v not in seen:
+                        uniq.append(v)
+                        seen.add(v)
+                # show values in a compact bulleted list
+                for i, v in enumerate(uniq, start=1):
+                    st.write(f"{i}. {v}")
+
+        else:
+            # No key search — show short chips for detected keys across matching rows
+            all_keys = []
+            for _, kv in parsed_results:
+                for k in kv.keys():
+                    if k not in all_keys:
+                        all_keys.append(k)
+            if all_keys:
+                st.markdown("**Detected keys:**")
+                chips_html = "".join([f"<span class='det-chip'>{k}</span>" for k in all_keys])
+                st.markdown(chips_html, unsafe_allow_html=True)
+            else:
+                st.info("No structured keys were detected in the Detail column for this OTA.")
+
+        # Compact inline raw rows expander (preserve previous behavior)
+        with st.expander("Show raw Detail rows", expanded=show_raw_toggle):
+            for i, t in enumerate(shown_rows, start=1):
+                st.write(f"**{i}.** {t}")
+
+# ---------- Raw rows (table) — kept but collapsed by default below main area ----------
+with st.expander("Show raw rows for selected OTA (table)"):
     st.dataframe(rows.reset_index(drop=True))
 
 # ---------- Footer guidance ----------
