@@ -9,8 +9,48 @@ SHEET_NAME = "Sheet1"
 
 st.set_page_config(page_title="OTA Behaviour Search Tool", layout="wide")
 
-st.title("🔎 OTA Behaviour Search Tool")
-st.caption("Search OTA → Select category → View cleaned (meaning-safe) details")
+# ================= CUSTOM CSS (COMPACT UI) =================
+st.markdown("""
+<style>
+/* Reduce top padding */
+.block-container {padding-top: 1rem; padding-bottom: 1rem;}
+
+/* Compact headers */
+h1 {font-size: 26px; margin-bottom: 4px;}
+h2 {font-size: 20px; margin-bottom: 6px;}
+h3 {font-size: 18px; margin-bottom: 6px;}
+
+/* Reduce space between widgets */
+.stTextInput, .stRadio {margin-bottom: 6px;}
+hr {margin: 8px 0;}
+
+/* Bullet list compact */
+ul {margin-top: 4px; margin-bottom: 4px;}
+li {margin-bottom: 4px;}
+
+/* Highlight selected OTA */
+.selected-box {
+    background-color: #ecfdf5;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #a7f3d0;
+    margin-bottom: 8px;
+}
+
+/* Section container */
+.section-box {
+    background-color: #f9fafb;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ================= TITLE =================
+st.markdown("## 🔎 OTA Behaviour Search Tool")
+st.caption("Search OTA → Select category → View details (compact view)")
+st.markdown("---")
 
 # ================= LOAD EXCEL =================
 if not os.path.exists(EXCEL_PATH):
@@ -38,96 +78,83 @@ OTHER_COL = get_col("other important points")
 
 # ================= SAFE TEXT CLEANER =================
 def clean_text(text: str) -> str:
-    """
-    Meaning-safe cleanup:
-    - fixes spacing
-    - fixes punctuation
-    - keeps ALL original words intact
-    """
     if not isinstance(text, str):
         return ""
-
     text = text.strip()
-    text = re.sub(r"\s+", " ", text)              # extra spaces
-    text = re.sub(r"\.\s*(\d)", r". \1", text)    # spacing after full stop
-    text = re.sub(r":\s*", ": ", text)            # spacing after colon
-    text = re.sub(r";\s*", "; ", text)
-
-    # Capitalize first letter only (do NOT change words)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\.\s*(\d)", r". \1", text)
+    text = re.sub(r":\s*", ": ", text)
     if text:
         text = text[0].upper() + text[1:]
-
     return text
 
-# ================= OTA SEARCH =================
-st.subheader("Search OTA")
+# ================= LAYOUT =================
+left_col, right_col = st.columns([3, 7], gap="large")
 
-ota_query = st.text_input(
-    "Enter OTA Name (e.g. Booking.com, Agoda)",
-    placeholder="Type OTA name..."
-).strip()
+# ================= LEFT PANEL =================
+with left_col:
+    st.markdown("### Search OTA")
 
-if not ota_query:
-    st.info("Please enter an OTA name.")
-    st.stop()
+    ota_query = st.text_input(
+        "OTA Name",
+        placeholder="Booking.com, Agoda"
+    ).strip()
 
-matches = df[df[OTA_COL].astype(str).str.lower().str.contains(ota_query.lower(), na=False)]
+    if not ota_query:
+        st.info("Enter OTA name")
+        st.stop()
 
-if matches.empty:
-    st.warning("No OTA found.")
-    st.stop()
+    matches = df[df[OTA_COL].astype(str).str.lower().str.contains(ota_query.lower(), na=False)]
+    if matches.empty:
+        st.warning("No OTA found")
+        st.stop()
 
-selected_ota = matches[OTA_COL].iloc[0]
-st.success(f"Selected OTA: **{selected_ota}**")
+    selected_ota = matches[OTA_COL].iloc[0]
 
-ota_df = df[df[OTA_COL].astype(str).str.lower() == selected_ota.lower()]
+    st.markdown(f"<div class='selected-box'><strong>Selected OTA:</strong> {selected_ota}</div>",
+                unsafe_allow_html=True)
 
-# ================= RADIO BUTTON =================
-option = st.radio(
-    "Select Information Type",
-    (
-        "Setup Details",
-        "ARI Behaviour",
-        "Reservation Behaviour",
-        "Other Important Points",
-    ),
-    horizontal=True,
-)
-
-st.markdown("---")
-
-# ================= DISPLAY =================
-def show_values(column_name):
-    values = (
-        ota_df[column_name]
-        .dropna()
-        .astype(str)
-        .str.strip()
-        .unique()
+    option = st.radio(
+        "Information Type",
+        (
+            "Setup Details",
+            "ARI Behaviour",
+            "Reservation Behaviour",
+            "Other Important Points",
+        ),
     )
 
-    if len(values) == 0:
-        st.info("No data available.")
-        return
+# ================= RIGHT PANEL =================
+with right_col:
+    ota_df = df[df[OTA_COL].astype(str).str.lower() == selected_ota.lower()]
 
-    for v in values:
-        st.markdown(f"- {clean_text(v)}")
+    st.markdown(f"### 📄 {option}")
+    st.markdown("<div class='section-box'>", unsafe_allow_html=True)
 
-if option == "Setup Details":
-    st.subheader("🛠 Setup Details")
-    show_values(SETUP_COL)
+    def show_values(column_name):
+        values = (
+            ota_df[column_name]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .unique()
+        )
+        if len(values) == 0:
+            st.info("No data available.")
+            return
+        for v in values:
+            st.markdown(f"- {clean_text(v)}")
 
-elif option == "ARI Behaviour":
-    st.subheader("📊 ARI Behaviour")
-    show_values(ARI_COL)
+    if option == "Setup Details":
+        show_values(SETUP_COL)
+    elif option == "ARI Behaviour":
+        show_values(ARI_COL)
+    elif option == "Reservation Behaviour":
+        show_values(RES_COL)
+    elif option == "Other Important Points":
+        show_values(OTHER_COL)
 
-elif option == "Reservation Behaviour":
-    st.subheader("📑 Reservation Behaviour")
-    show_values(RES_COL)
-
-elif option == "Other Important Points":
-    st.subheader("📌 Other Important Points")
-    show_values(OTHER_COL)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Text is cleaned safely. Meaning and brand names are preserved.")
+st.caption("Compact single-page view • Clean alignment • Meaning preserved")
