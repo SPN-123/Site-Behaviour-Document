@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-from textblob import TextBlob
+import re
 
 # ================= CONFIG =================
 EXCEL_PATH = "XY.xlsx"
@@ -10,7 +10,7 @@ SHEET_NAME = "Sheet1"
 st.set_page_config(page_title="OTA Behaviour Search Tool", layout="wide")
 
 st.title("🔎 OTA Behaviour Search Tool")
-st.caption("Search OTA → Select category → View corrected details")
+st.caption("Search OTA → Select category → View cleaned (meaning-safe) details")
 
 # ================= LOAD EXCEL =================
 if not os.path.exists(EXCEL_PATH):
@@ -20,7 +20,7 @@ if not os.path.exists(EXCEL_PATH):
 df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
 df.columns = df.columns.str.strip()
 
-# ================= COLUMN SAFE MAPPING =================
+# ================= SAFE COLUMN MAPPING =================
 col_map = {c.lower(): c for c in df.columns}
 
 def get_col(name):
@@ -36,18 +36,28 @@ ARI_COL   = get_col("ari behaviour")
 RES_COL   = get_col("reservation behaviour")
 OTHER_COL = get_col("other important points")
 
-# ================= TEXT CORRECTION =================
-def correct_text(text: str) -> str:
+# ================= SAFE TEXT CLEANER =================
+def clean_text(text: str) -> str:
     """
-    Fix spelling + basic grammar.
-    Safe fallback if correction fails.
+    Meaning-safe cleanup:
+    - fixes spacing
+    - fixes punctuation
+    - keeps ALL original words intact
     """
-    try:
-        blob = TextBlob(text)
-        corrected = str(blob.correct())
-        return corrected
-    except Exception:
-        return text  # fallback if anything breaks
+    if not isinstance(text, str):
+        return ""
+
+    text = text.strip()
+    text = re.sub(r"\s+", " ", text)              # extra spaces
+    text = re.sub(r"\.\s*(\d)", r". \1", text)    # spacing after full stop
+    text = re.sub(r":\s*", ": ", text)            # spacing after colon
+    text = re.sub(r";\s*", "; ", text)
+
+    # Capitalize first letter only (do NOT change words)
+    if text:
+        text = text[0].upper() + text[1:]
+
+    return text
 
 # ================= OTA SEARCH =================
 st.subheader("Search OTA")
@@ -87,7 +97,7 @@ option = st.radio(
 st.markdown("---")
 
 # ================= DISPLAY =================
-def show_corrected_values(column_name):
+def show_values(column_name):
     values = (
         ota_df[column_name]
         .dropna()
@@ -101,24 +111,23 @@ def show_corrected_values(column_name):
         return
 
     for v in values:
-        corrected = correct_text(v)
-        st.markdown(f"- {corrected}")
+        st.markdown(f"- {clean_text(v)}")
 
 if option == "Setup Details":
-    st.subheader("🛠 Setup Details (Auto-Corrected)")
-    show_corrected_values(SETUP_COL)
+    st.subheader("🛠 Setup Details")
+    show_values(SETUP_COL)
 
 elif option == "ARI Behaviour":
-    st.subheader("📊 ARI Behaviour (Auto-Corrected)")
-    show_corrected_values(ARI_COL)
+    st.subheader("📊 ARI Behaviour")
+    show_values(ARI_COL)
 
 elif option == "Reservation Behaviour":
-    st.subheader("📑 Reservation Behaviour (Auto-Corrected)")
-    show_corrected_values(RES_COL)
+    st.subheader("📑 Reservation Behaviour")
+    show_values(RES_COL)
 
 elif option == "Other Important Points":
-    st.subheader("📌 Other Important Points (Auto-Corrected)")
-    show_corrected_values(OTHER_COL)
+    st.subheader("📌 Other Important Points")
+    show_values(OTHER_COL)
 
 st.markdown("---")
-st.caption("Text is auto-corrected for spelling and basic grammar.")
+st.caption("Text is cleaned safely. Meaning and brand names are preserved.")
