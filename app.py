@@ -13,20 +13,19 @@ st.set_page_config(page_title="OTA Behaviour Search Tool", layout="wide")
 # ================= CSS =================
 st.markdown("""
 <style>
-.block-container {padding-top: 1rem; padding-bottom: 1rem;}
-.stTextInput, .stRadio {margin-bottom: 6px;}
+.block-container {padding-top: 1rem;}
 .selected-box {
-    background-color: #ecfdf5;
-    padding: 8px 12px;
-    border-radius: 6px;
-    border: 1px solid #a7f3d0;
-    margin-bottom: 8px;
+    background:#ecfdf5;
+    padding:8px 12px;
+    border-radius:6px;
+    border:1px solid #a7f3d0;
+    margin-bottom:8px;
 }
 .section-box {
-    background-color: #f9fafb;
-    padding: 12px 16px;
-    border-radius: 8px;
-    border: 1px solid #e5e7eb;
+    background:#f9fafb;
+    padding:12px 16px;
+    border-radius:8px;
+    border:1px solid #e5e7eb;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -37,176 +36,135 @@ st.caption("Text or Voice Search → Select category → Search inside details")
 st.markdown("---")
 
 # ================= LOAD EXCEL =================
-if not os.path.exists(EXCEL_PATH):
-    st.error("❌ XY.xlsx not found in repository root.")
-    st.stop()
-
 df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
 df.columns = df.columns.str.strip()
 
-# ================= COLUMN MAPPING =================
 col_map = {c.lower(): c for c in df.columns}
 
-def get_col(name):
-    if name.lower() not in col_map:
-        st.error(f"Missing column: {name}")
-        st.stop()
+def col(name):
     return col_map[name.lower()]
 
-OTA_COL   = get_col("ota name")
-SETUP_COL = get_col("set up details")
-ARI_COL   = get_col("ari behaviour")
-RES_COL   = get_col("reservation behaviour")
-OTHER_COL = get_col("other important points")
+OTA_COL   = col("ota name")
+SETUP_COL = col("set up details")
+ARI_COL   = col("ari behaviour")
+RES_COL   = col("reservation behaviour")
+OTHER_COL = col("other important points")
 
-# ================= TEXT CLEANER (SAFE) =================
-def clean_text(text):
-    if not isinstance(text, str):
-        return ""
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r":\s*", ": ", text)
-    return text[0].upper() + text[1:] if text else ""
+# ================= HELPERS =================
+def clean_text(t):
+    t = str(t).strip()
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r":\s*", ": ", t)
+    return t[0].upper() + t[1:] if t else ""
 
-# ================= OTA NORMALIZATION =================
-def normalize_ota(text):
-    if not text:
-        return ""
-    t = text.lower().strip()
-
-    replacements = {
-        " dot ": ".",
-        " dotcom": ".com",
-        " dot com": ".com",
-        " con": ".com",
-        " coma": ".com",
-    }
-
-    for k, v in replacements.items():
-        t = t.replace(k, v)
-
+def normalize_ota(t):
+    t = t.lower().strip()
+    t = t.replace(" dot ", ".")
+    t = t.replace(" dotcom", ".com")
+    t = t.replace(" dot com", ".com")
+    t = t.replace(" con", ".com")
     t = t.replace(" ", "")
     return t
 
 # ================= VOICE SEARCH =================
-components.html(
-    """
-    <script>
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.lang = 'en-US';
+components.html("""
+<script>
+function startVoice(){
+  const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+  rec.lang = 'en-US';
+  rec.onresult = e => {
+    const txt = e.results[0][0].transcript;
+    const otaInput = window.parent.document.querySelector('input[data-testid="ota-input"]');
+    otaInput.value = txt;
+    otaInput.dispatchEvent(new Event('input', {bubbles:true}));
+  }
+  rec.start();
+}
+</script>
 
-    function startVoice() {
-        recognition.start();
-    }
-
-    recognition.onresult = function(event) {
-        const text = event.results[0][0].transcript;
-        const input = window.parent.document.querySelector('input[type="text"]');
-        input.value = text;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    </script>
-
-    <button onclick="startVoice()" style="
-        padding:8px 12px;
-        border-radius:6px;
-        border:1px solid #ccc;
-        background:#fff;
-        cursor:pointer;
-        margin-bottom:10px;">
-        🎤 Voice Search
-    </button>
-    """,
-    height=60
-)
+<button onclick="startVoice()"
+ style="padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#fff;">
+🎤 Voice Search
+</button>
+""", height=60)
 
 # ================= LAYOUT =================
-left_col, right_col = st.columns([3, 7], gap="large")
+left, right = st.columns([3,7])
 
-# ================= LEFT PANEL =================
-with left_col:
+# ================= LEFT =================
+with left:
     st.markdown("### Search OTA")
 
     ota_query = st.text_input(
         "OTA Name",
-        placeholder="Type or speak OTA name (e.g. Booking.com)"
-    ).strip()
-
-    if not ota_query:
-        st.info("Enter or speak OTA name")
-        st.stop()
-
-    normalized_query = normalize_ota(ota_query)
-
-    matches = df[
-        df[OTA_COL]
-        .astype(str)
-        .str.lower()
-        .apply(normalize_ota)
-        .str.contains(normalized_query, na=False)
-    ]
-
-    if matches.empty:
-        st.warning("No OTA found")
-        st.stop()
-
-    selected_ota = matches[OTA_COL].iloc[0]
-
+        key="ota_input",
+        placeholder="Type or speak OTA name"
+    )
     st.markdown(
-        f"<div class='selected-box'><strong>Selected OTA:</strong> {selected_ota}</div>",
+        "<script>document.querySelector('input').setAttribute('data-testid','ota-input')</script>",
         unsafe_allow_html=True
     )
 
-    option = st.radio(
-        "Information Type",
-        (
-            "Setup Details",
-            "ARI Behaviour",
-            "Reservation Behaviour",
-            "Other Important Points",
-        ),
-    )
+    if ota_query:
+        nq = normalize_ota(ota_query)
+        matches = df[
+            df[OTA_COL].astype(str).str.lower().apply(normalize_ota).str.contains(nq)
+        ]
+    else:
+        matches = pd.DataFrame()
 
-# ================= RIGHT PANEL =================
-with right_col:
-    ota_df = df[
-        df[OTA_COL]
-        .astype(str)
-        .str.lower()
-        .apply(normalize_ota)
-        == normalize_ota(selected_ota)
-    ]
+    if not matches.empty:
+        selected_ota = matches[OTA_COL].iloc[0]
+        st.markdown(
+            f"<div class='selected-box'><b>Selected OTA:</b> {selected_ota}</div>",
+            unsafe_allow_html=True
+        )
 
-    option_map = {
-        "Setup Details": SETUP_COL,
-        "ARI Behaviour": ARI_COL,
-        "Reservation Behaviour": RES_COL,
-        "Other Important Points": OTHER_COL,
-    }
+        option = st.radio(
+            "Information Type",
+            ["Setup Details", "ARI Behaviour", "Reservation Behaviour", "Other Important Points"]
+        )
+    else:
+        option = None
+        selected_ota = None
 
-    active_col = option_map[option]
+# ================= RIGHT =================
+with right:
+    if selected_ota:
+        ota_df = df[
+            df[OTA_COL].astype(str).str.lower().apply(normalize_ota)
+            == normalize_ota(selected_ota)
+        ]
 
-    st.markdown(f"### 📄 {option}")
+        col_map_opt = {
+            "Setup Details": SETUP_COL,
+            "ARI Behaviour": ARI_COL,
+            "Reservation Behaviour": RES_COL,
+            "Other Important Points": OTHER_COL,
+        }
 
-    detail_search = st.text_input(
-        "Search inside details",
-        placeholder="payment, cvv, allocation..."
-    ).lower()
+        active_col = col_map_opt[option]
 
-    st.markdown("<div class='section-box'>", unsafe_allow_html=True)
+        st.markdown(f"### 📄 {option}")
 
-    values = ota_df[active_col].dropna().unique()
+        detail_search = st.text_input(
+            "Search inside details",
+            placeholder="payment, cvv, allocation..."
+        ).lower()
 
-    shown = False
-    for v in values:
-        cleaned = clean_text(v)
-        if not detail_search or detail_search in cleaned.lower():
-            st.markdown(f"- {cleaned}")
-            shown = True
+        st.markdown("<div class='section-box'>", unsafe_allow_html=True)
 
-    if not shown:
-        st.info("No matching details found.")
+        shown = False
+        for v in ota_df[active_col].dropna().unique():
+            txt = clean_text(v)
+            if not detail_search or detail_search in txt.lower():
+                st.markdown(f"- {txt}")
+                shown = True
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        if not shown:
+            st.info("No matching details found.")
 
-st.caption("Voice search supports: booking.com, booking dot com, booking con, agoda")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    else:
+        st.info("Enter or speak an OTA name to see details.")
