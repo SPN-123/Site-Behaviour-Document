@@ -12,23 +12,14 @@ st.set_page_config(page_title="OTA Behaviour Search Tool", layout="wide")
 # ================= CUSTOM CSS (COMPACT UI) =================
 st.markdown("""
 <style>
-/* Reduce top padding */
 .block-container {padding-top: 1rem; padding-bottom: 1rem;}
-
-/* Compact headers */
 h1 {font-size: 26px; margin-bottom: 4px;}
 h2 {font-size: 20px; margin-bottom: 6px;}
 h3 {font-size: 18px; margin-bottom: 6px;}
-
-/* Reduce space between widgets */
 .stTextInput, .stRadio {margin-bottom: 6px;}
 hr {margin: 8px 0;}
-
-/* Bullet list compact */
 ul {margin-top: 4px; margin-bottom: 4px;}
 li {margin-bottom: 4px;}
-
-/* Highlight selected OTA */
 .selected-box {
     background-color: #ecfdf5;
     padding: 8px 12px;
@@ -36,8 +27,6 @@ li {margin-bottom: 4px;}
     border: 1px solid #a7f3d0;
     margin-bottom: 8px;
 }
-
-/* Section container */
 .section-box {
     background-color: #f9fafb;
     padding: 12px 16px;
@@ -49,12 +38,12 @@ li {margin-bottom: 4px;}
 
 # ================= TITLE =================
 st.markdown("## 🔎 OTA Behaviour Search Tool")
-st.caption("Search OTA → Select category → View details (compact view)")
+st.caption("Search OTA → Select category → Search inside details")
 st.markdown("---")
 
 # ================= LOAD EXCEL =================
 if not os.path.exists(EXCEL_PATH):
-    st.error("❌ XY.xlsx not found in repository root.")
+    st.error("XY.xlsx not found in repository root.")
     st.stop()
 
 df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
@@ -82,7 +71,6 @@ def clean_text(text: str) -> str:
         return ""
     text = text.strip()
     text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\.\s*(\d)", r". \1", text)
     text = re.sub(r":\s*", ": ", text)
     if text:
         text = text[0].upper() + text[1:]
@@ -95,10 +83,7 @@ left_col, right_col = st.columns([3, 7], gap="large")
 with left_col:
     st.markdown("### Search OTA")
 
-    ota_query = st.text_input(
-        "OTA Name",
-        placeholder="Booking.com, Agoda"
-    ).strip()
+    ota_query = st.text_input("OTA Name", placeholder="Booking.com, Agoda").strip()
 
     if not ota_query:
         st.info("Enter OTA name")
@@ -111,8 +96,10 @@ with left_col:
 
     selected_ota = matches[OTA_COL].iloc[0]
 
-    st.markdown(f"<div class='selected-box'><strong>Selected OTA:</strong> {selected_ota}</div>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='selected-box'><strong>Selected OTA:</strong> {selected_ota}</div>",
+        unsafe_allow_html=True
+    )
 
     option = st.radio(
         "Information Type",
@@ -128,33 +115,46 @@ with left_col:
 with right_col:
     ota_df = df[df[OTA_COL].astype(str).str.lower() == selected_ota.lower()]
 
+    # Pick column based on option
+    col_map_option = {
+        "Setup Details": SETUP_COL,
+        "ARI Behaviour": ARI_COL,
+        "Reservation Behaviour": RES_COL,
+        "Other Important Points": OTHER_COL,
+    }
+    active_col = col_map_option[option]
+
     st.markdown(f"### 📄 {option}")
+
+    # 🔍 SEARCH INSIDE DETAILS
+    detail_search = st.text_input(
+        "Search inside details",
+        placeholder="Type keyword e.g. payment, CVV, OPB..."
+    ).strip().lower()
+
     st.markdown("<div class='section-box'>", unsafe_allow_html=True)
 
-    def show_values(column_name):
-        values = (
-            ota_df[column_name]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .unique()
-        )
-        if len(values) == 0:
-            st.info("No data available.")
-            return
-        for v in values:
-            st.markdown(f"- {clean_text(v)}")
+    values = (
+        ota_df[active_col]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+    )
 
-    if option == "Setup Details":
-        show_values(SETUP_COL)
-    elif option == "ARI Behaviour":
-        show_values(ARI_COL)
-    elif option == "Reservation Behaviour":
-        show_values(RES_COL)
-    elif option == "Other Important Points":
-        show_values(OTHER_COL)
+    filtered = []
+    for v in values:
+        cleaned = clean_text(v)
+        if not detail_search or detail_search in cleaned.lower():
+            filtered.append(cleaned)
+
+    if not filtered:
+        st.info("No matching details found.")
+    else:
+        for item in filtered:
+            st.markdown(f"- {item}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Compact single-page view • Clean alignment • Meaning preserved")
+st.caption("Search works within the selected section only • Compact single-page layout")
