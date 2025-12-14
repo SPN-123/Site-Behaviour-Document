@@ -32,10 +32,10 @@ st.markdown("""
 
 # ================= TITLE =================
 st.markdown("## 🔎 OTA Behaviour Search Tool")
-st.caption("Text or Voice Search → Select category → Search inside details")
+st.caption("Voice or text → Apply → View details")
 st.markdown("---")
 
-# ================= LOAD EXCEL =================
+# ================= LOAD DATA =================
 df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
 df.columns = df.columns.str.strip()
 
@@ -70,17 +70,18 @@ def normalize_ota(t):
 # ================= SESSION STATE =================
 if "voice_text" not in st.session_state:
     st.session_state.voice_text = ""
+if "search_text" not in st.session_state:
+    st.session_state.search_text = ""
 
-# ================= VOICE INPUT (SAFE) =================
+# ================= VOICE INPUT =================
 components.html("""
 <script>
-let rec;
 function startVoice(){
-  rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+  const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
   rec.lang = 'en-US';
   rec.onresult = e => {
     const txt = e.results[0][0].transcript;
-    window.parent.postMessage({type:"VOICE_TEXT", value: txt}, "*");
+    window.parent.postMessage({type:"VOICE", value: txt}, "*");
   }
   rec.start();
 }
@@ -92,12 +93,12 @@ function startVoice(){
 </button>
 """, height=60)
 
-# Capture voice text safely
+# Receive voice text
 components.html("""
 <script>
 window.addEventListener("message", (e) => {
-  if (e.data.type === "VOICE_TEXT") {
-    const el = window.parent.document.getElementById("voice_holder");
+  if (e.data.type === "VOICE") {
+    const el = window.parent.document.getElementById("voice-box");
     el.value = e.data.value;
     el.dispatchEvent(new Event("change"));
   }
@@ -105,12 +106,16 @@ window.addEventListener("message", (e) => {
 </script>
 """, height=0)
 
-# Hidden holder to sync with Streamlit
-voice_holder = st.text_input(
-    "voice_holder",
-    key="voice_holder",
-    label_visibility="collapsed"
+st.text_input(
+    "Voice Result",
+    key="voice_text",
+    label_visibility="collapsed",
+    placeholder="Voice result will appear here",
 )
+
+# ================= APPLY BUTTON =================
+if st.button("Apply Voice / Text Input"):
+    st.session_state.search_text = st.session_state.voice_text
 
 # ================= LAYOUT =================
 left, right = st.columns([3,7])
@@ -121,18 +126,15 @@ with left:
 
     ota_query = st.text_input(
         "OTA Name",
-        value=voice_holder,
-        placeholder="Type or use voice search"
+        value=st.session_state.search_text,
+        placeholder="Booking.com or Agoda"
     )
 
     normalized_query = normalize_ota(ota_query)
 
     if normalized_query:
         matches = df[
-            df[OTA_COL]
-            .astype(str)
-            .str.lower()
-            .apply(normalize_ota)
+            df[OTA_COL].astype(str).str.lower().apply(normalize_ota)
             .str.contains(normalized_query)
         ]
     else:
@@ -152,16 +154,13 @@ with left:
     else:
         selected_ota = None
         option = None
-        st.info("Say or type Booking.com or Agoda")
+        st.info("Say or type Booking.com or Agoda, then click Apply")
 
 # ================= RIGHT =================
 with right:
     if selected_ota:
         ota_df = df[
-            df[OTA_COL]
-            .astype(str)
-            .str.lower()
-            .apply(normalize_ota)
+            df[OTA_COL].astype(str).str.lower().apply(normalize_ota)
             == normalize_ota(selected_ota)
         ]
 
